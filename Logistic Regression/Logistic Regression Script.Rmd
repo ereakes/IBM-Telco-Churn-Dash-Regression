@@ -1,0 +1,272 @@
+---
+title: "Telco Logistic Regression Script"
+author: "Ewan Reakes"
+date: "2025-07-11"
+output: html_document
+---
+
+```{r warning = FALSE, message = FALSE}
+library(tidyverse) # For data cleaning and manipulation
+library(readxl)    # To read in excel files
+library(corrplot)  # For visualisation of corrleation
+library(caret)     # For stepwise regression
+library(glmnet)    # For LASSO regression
+library(pROC)      # For AUC calculation
+
+set.seed(123)
+```
+
+```{r}
+# Loading selected datasets from IBM telco mock churn "https://tinyurl.com/3pf7rmua" ---------------------------
+demo <- read_xlsx("C:\\Users\\ereak\\OneDrive\\Documents\\R\\IBM-Telco-Churn-Dash-main\\Raw Data\\Telco_customer_churn_demographics.xlsx")
+
+service <- read_xlsx("C:\\Users\\ereak\\OneDrive\\Documents\\R\\IBM-Telco-Churn-Dash-main\\Raw Data\\Telco_customer_churn_services.xlsx")
+
+status <- read_xlsx("C:\\Users\\ereak\\OneDrive\\Documents\\R\\IBM-Telco-Churn-Dash-main\\Raw Data\\Telco_customer_churn_status.xlsx")
+```
+
+```{r}
+# Removing redundant detail and IDs ---------------------------
+service <- service %>%
+  select(!c(1, 3, 4))
+status <- status %>%
+  select(!c(1, 3, 4, 11, 12))
+
+# Cleaning and joining datasets ---------------------------
+# Then changing Y N questions to 0 1
+comb <- demo %>%
+  select(!c(2, 5, 6, 8)) %>%  # Removing columns with ID and demographic detail
+  left_join(service, by = join_by("Customer ID")) %>%
+  left_join(status, by = join_by("Customer ID")) %>%
+  mutate(across(c(Married,
+                  `Phone Service`,
+                  `Referred a Friend`,
+                  `Multiple Lines`,
+                  `Internet Service`,
+                  `Online Security`,
+                  `Online Backup`,
+                  `Device Protection Plan`,
+                  `Premium Tech Support`,
+                  `Streaming TV`,
+                  `Streaming Movies`,
+                  `Streaming Music`,
+                  `Unlimited Data`,
+                  `Paperless Billing`), ~ ifelse(.x == "No", 0, 1)))
+
+# Checking for NA values
+sum(is.na(comb))
+
+# Converting character columns to integers ---------------------------
+# Checking how many unique values occur per column
+unique(comb$Offer)
+unique(comb$`Internet Type`)
+unique(comb$Contract)
+unique(comb$`Payment Method`)
+
+comb <- comb %>%
+  mutate(Offer = case_when(
+    Offer == "None" ~ 0,
+    Offer == "Offer A" ~ 1,
+    Offer == "Offer B" ~ 2,
+    Offer == "Offer C" ~ 3,
+    Offer == "Offer D" ~ 4,
+    Offer == "Offer E" ~ 5,
+    TRUE ~ NA_integer_
+  )) %>%
+  mutate(`Internet Type` = case_when(
+    `Internet Type` == "None" ~ 0,
+    `Internet Type` == "DSL" ~ 1,
+    `Internet Type` == "Fiber Optic" ~ 2,
+    `Internet Type` == "Cable" ~ 3,
+    TRUE ~ NA_integer_
+  )) %>%
+  mutate(Contract = case_when(
+    Contract == "Month-to-Month" ~ 0,
+    Contract == "One Year" ~ 1,
+    Contract == "Two Year" ~ 2,
+    TRUE ~ NA_integer_
+  )) %>%
+  mutate(`Payment Method` = case_when(
+    `Payment Method` == "Bank Withdrawal" ~ 0,
+    `Payment Method` == "Credit Card" ~ 1,
+    `Payment Method` == "Mailed Check" ~ 2,
+    TRUE ~ NA_integer_
+  )) %>%
+  mutate(Gender = ifelse(Gender == "Male", 1, 0))
+```
+
+```{r}
+# Removing redundant IDs and churn detail ---------------------------
+comb_s <- comb %>%
+  select(!c(28, 29, 31, 32, 34, 35, 37, 38))
+
+# Check for columns that have near zero variance ---------------------------
+nearZeroVar(comb_s, freqCut = 95 / 5)
+
+# Removing col 27 due to lack of variance 
+comb_s <- comb_s %>%
+  select(!28)
+
+# Determining the correlation between variables---------------------------
+cor_matrix <- cor(comb_s[,2:29], use = "complete.obs")
+
+# Plotting correlation
+png("corrplot.png", width = 2800, height = 2800, res = 150) # Adjust width/height as needed
+
+corrplot(cor_matrix,
+  method = "color", # Color-coded squares
+  type = "upper", # Show only upper triangle
+  tl.col = "black", # Text label color
+  tl.srt = 45, # Rotate variable names
+  addCoef.col = "black",
+  order = "hclust",
+  mar = c(2, 2, 2, 2)
+)
+
+# Saving plot
+dev.off()
+
+# Returning high correlation pairs ---------------------------
+high_corr <- which(abs(cor_matrix) > 0.7 & upper.tri(cor_matrix), arr.ind = TRUE)
+high_corr_pairs <- data.frame(
+  Var1 = colnames(cor_matrix)[high_corr[, 1]],
+  Var2 = colnames(cor_matrix)[high_corr[, 2]],
+  Correlation = cor_matrix[high_corr]
+)
+high_corr_pairs <- high_corr_pairs[order(-abs(high_corr_pairs$Correlation)), ]
+print(high_corr_pairs)
+
+# Removing Var2 of high correlation pairs >0.8 ---------------------------
+comb_s <- comb_s %>%
+  select(!c(6, 22))
+
+# Splitting into training and testing ---------------------------
+splitData <- createDataPartition(y = comb_s$`Churn Value`, p = 0.75, list = FALSE)
+
+training <- comb_s[splitData,]
+testing <- comb_s[-splitData,]
+
+prop.table(table(training$`Churn Value`))
+prop.table(table(testing$`Churn Value`))
+```
+
+
+```{r}
+# Creating matrix for use in the regression ---------------------------
+X <- model.matrix(
+  `Churn Value` ~ Gender + Age + Married + `Number of Dependents` +
+    `Number of Referrals` + `Tenure in Months` + Offer + `Phone Service` +
+    `Avg Monthly Long Distance Charges` + `Multiple Lines` + `Internet Service` +
+    `Internet Type` + `Avg Monthly GB Download` + `Online Security` +
+    `Online Backup` + `Device Protection Plan` + `Premium Tech Support` +
+    `Streaming TV` + `Streaming Movies` + `Unlimited Data` + Contract +
+    `Paperless Billing` + `Payment Method` + `Monthly Charge` + `Satisfaction Score`,
+  data = training
+)[, -1]
+
+# Selecting dependent variable
+y <- training$`Churn Value`
+
+X_names <- as.data.frame(X)
+
+continuous_var_names <- X_names %>% 
+  select(where(~ !all(.x %in% c(0, 1)))) %>% 
+  names()
+
+# Scaling matrix to minimise bias and improve predictions
+X_scaled <- X
+X_scaled[, continuous_var_names] <- scale(X[, continuous_var_names])
+```
+
+
+```{r}
+# LASSO regression ---------------------------
+
+# Cross-validate to find optimal lambda ---------------------------
+cv_lasso <- cv.glmnet(
+  X_scaled,
+  y,
+  family = "binomial",
+  alpha = 0.5,
+  type.measure = "class",
+  standardize = FALSE
+)
+
+plot(cv_lasso)
+
+# Final logistic regression LASSO ---------------------------
+final_lasso <- glmnet(
+  X_scaled,
+  y,
+  family = "binomial",
+  alpha = 0.5,
+  lambda = cv_lasso$lambda.min
+)
+```
+
+```{r}
+# Attempting prediction of model ---------------------------
+testing_r <- as.matrix(testing %>% select(-c(`Churn Value`,`Customer ID`)))
+
+test_prob <- predict(final_lasso, 
+                     newx = testing_r, 
+                     type = "response",
+                     s = "lambda.min")
+
+# Testing model effectiveness ---------------------------
+# Calculate AUC
+roc_curve <- roc(testing$`Churn Value`, test_prob[,1])
+auc_val <- auc(roc_curve)
+
+plot(roc_curve, main = paste0("ROC Curve (AUC = ", round(auc_val, 3), ")"))
+abline(h = 1, v = 0, col = "gray")
+
+# Confusion matrix at threshold 0.5 ---------------------------
+standard_threshold <- ifelse(test_prob[, 1] > 0.5, 1, 0)
+
+predicted_class_std <- ifelse(test_prob[, 1] > standard_threshold, 1, 0)
+
+conf_matrix_std <- confusionMatrix(as.factor(predicted_class_std), as.factor(testing$`Churn Value`), positive = "1")
+
+conf_matrix_std
+
+# Confusion matrix at optimal threshold ---------------------------
+optimal_threshold <- coords(roc_curve, "best", ret = "threshold")$threshold
+
+predicted_class_opt <- ifelse(test_prob[, 1] > optimal_threshold, 1, 0)
+
+conf_matrix_opt <- confusionMatrix(as.factor(predicted_class_opt), as.factor(testing$`Churn Value`), positive = "1")
+
+conf_matrix_opt
+```
+
+```{r}
+# Exporting data for use in Power BI ---------------------------
+# Performance metrics
+metrics <- data.frame(
+  Metric = c("AUC", "Sensitivity", "Specificity", "Precision", "F1"),
+  Value  = c(auc_val,
+             conf_matrix_opt$byClass["Sensitivity"],
+             conf_matrix_opt$byClass["Specificity"],
+             conf_matrix_opt$byClass["Precision"],
+             conf_matrix_opt$byClass["F1"])
+)
+
+# Coefficients
+coef_df <- data.frame(
+  Variable = rownames(coef(final_lasso, s = "lambda.min")),
+  Coefficient = coef(final_lasso, s = "lambda.min")[, 1]
+) %>% filter(Coefficient != 0)
+
+# Probabilities and actuals
+prob_df <- data.frame(
+  Customer_ID = testing$`Customer ID`,
+  Predicted_Prob = test_prob[, 1],
+  Actual_Churn = testing$`Churn Value`
+)
+
+write.csv(metrics, "model_metrics.csv")
+write.csv(coef_df, "coefficients.csv")
+write.csv(prob_df, "predictions.csv")
+```
+
