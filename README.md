@@ -1,5 +1,5 @@
 # IBM-Telco-Churn-Dash-Regression
-Dashboard visualising IBMs mock churn data, using Logistic Regression in R to understand churn predictors. Using R for visualisations, shapefile changes and regression. Using Power BI to display the information in dashboard format.
+A project using IBM's mock telecommunications business data focussed on customer churn. I created a dashboard in Power BI to visualise the datasets and present a the results of a logistic regression model that was created in R.
 
 # Dashboard and Analysis in Power BI 
 The overview page was built to give a general look at the churn numbers as well as the financial impacts of customers churning, their satisfaction and location. The dates for churns were randomly generated to give more detailed timeseries analysis as the original data was at the quarter level. This does impact the analysis somewhat as timeseries analysis is more or less useless. This was somewhat of an oversight but did provide opportunity to learn some random generation stuff in R.
@@ -8,7 +8,7 @@ The churn risk page gives an overview of the statistics created in the R script.
 
 The services and demographics pages were meant to be able to provide information on a wide range of parameters. Power BI's parameter feature was use to increase the interactivity of this page with a category tree to allow users to explore how different parameters interact with each other.
 
-The County page uses a county selection (counties were matched with ZIP codes provided in the IBM dataset in R) mainly due to the fact my laptop couldn't handle displaying all of the zip codes at once. Selection can be through the county map or a list of the county names and then the individual zip codes will be displayed with their churn ratio as a legend.
+The County page uses a county selection (counties were matched with ZIP codes provided in the IBM dataset using R and a ZIP to county file) mainly due to the fact my laptop couldn't handle displaying all of the zip codes at once. Selection can be through the county map or a list of the county names and then the individual zip codes will be displayed with their churn ratio as a legend.
 
 Analysis
 Using the top variables impacting churn likelihood to monitor those with high CLTV scores would be key in maintaining a manageable churn ratio. Using the regression model on additional data would help improve understanding of the model's performance and allow for monitoring for customers at risk of leaving.
